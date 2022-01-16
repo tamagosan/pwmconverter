@@ -34,31 +34,30 @@
 /* USER CODE BEGIN PD */
 #define PI			3.141593f
 
-#define TIM_SPL		5.0e-5f
+#define S_FREQ		20000			//Sampling,PWM,Control Frequency
+#define AC_FREQ 	50.0f			//Utility Frequency
+#define VAC_RMS 	100.0f			//Input RMS Voltage
 
-#define R_SHUNT		0.01f;
-#define VDC_DIV		5.452e-4f;
+#define IDC_LIM		3.0f			//Output Current Limit Value
+#define VDC_REF		300.0f			//Output Voltage
 
-#define AC_FREQ 	50.0f
-#define VAC_RMS 	100.0f
+#define R_SHUNT		0.01f;			//Current Sensor Shunt Resistance
+#define VDC_DIV		5.452e-4f;		//Voltage Sensor Divider Gain
 
-#define PRM_R		0.4f
-#define PRM_L		0.75e-3f
-#define PRM_C		440e-6f
+#define PRM_R		0.4f			//Reactor Resistance
+#define PRM_L		0.75e-3f		//Reactor Inductance
+#define PRM_C		440.0e-6f		//Smoothing Capacitor (x1/5-1/10)
 
-#define VDC_LPF_COF	200.0f
-#define CO_FREQ		2000.0f
+#define VDC_LPF_COF	200.0f			//Voltage Sense LPF Cutoff Frequency
+#define CO_FREQ		2000.0f			//Current Control Crossover Frequency
 
-#define IDC_LIM		3.0f
-#define VDC_REF		300.0f
+#define OB_GAIN1	12033.03867f	//Observer Gain 1
+#define OB_GAIN2	59143.61742f	//Observer Gain 2
+#define OB_GAIN3	185107533.0f	//Observer Gain 3
 
-#define OB_GAIN1	12033.0386666846f
-#define OB_GAIN2	59143.6174165741f
-#define OB_GAIN3	185107533.014394f
-
-#define START_STEP	5000
-#define SS_BGN_STEP	10000
-#define SS_END_STEP 20000
+#define START_STEP	5000			//PLL & Observer Beginning Step
+#define SS_BGN_STEP	10000			//Soft Start Beginning Step
+#define SS_END_STEP	20000			//Soft Start Ending Step
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -96,12 +95,13 @@ static void MX_TIM1_Init(void);
 int main(void)
 {
   /* USER CODE BEGIN 1 */
+	float time_sample;
+
 	int start_flag1 = 0;
 	int start_flag2 = 0;
 	int start_flag3 = 0;
 	int start_cnt = 0;
 
-	float duty = 0;
 	float vdc_lpf_delay = 0;
 	float il;
 	float vdcs;
@@ -134,6 +134,7 @@ int main(void)
 	float il_err;
 	float ilc_p;
 
+	float duty = 0;
 	float pwm1;
 	float pwm2;
   /* USER CODE END 1 */
@@ -159,6 +160,10 @@ int main(void)
   MX_ADC1_Init();
   MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
+  TIM1 -> PSC = 0;
+  TIM1 -> ARR = HAL_RCC_GetHCLKFreq() / S_FREQ / 2 - 1;
+  time_sample = 1.0f / (float)S_FREQ;
+
   HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
   HAL_ADCEx_InjectedStart_IT(&hadc1);
   HAL_TIM_Base_Start_IT(&htim1);
@@ -179,8 +184,8 @@ int main(void)
     /* USER CODE END WHILE */
 
 	/* USER CODE BEGIN 3 */
-    if(adc_flag){
-    	/* get sensor value */
+	if(adc_flag){
+		/* get sensor value */
 		il = 1.0f - (2048.0f - (float)(ADC1 -> JDR1)) * 3.3f / 2048.0f / 8.2f / R_SHUNT;
 		vdcs = (float)(ADC1 -> JDR2) * 3.3f / 4096.0f / 8.2f / 2.0f / VDC_DIV;
 
@@ -205,8 +210,8 @@ int main(void)
 		}
 
 		/* DC voltage LPF */
-		vdc = vdc_lpf_delay + vdcs * TIM_SPL / (TIM_SPL + 1.0f / (2.0f * PI * VDC_LPF_COF));
-		vdc_lpf_delay = vdc * 1.0f / (2.0f * PI * VDC_LPF_COF) / (TIM_SPL + 1.0f / (2.0f * PI * VDC_LPF_COF));
+		vdc = vdc_lpf_delay + vdcs * time_sample / (time_sample + 1.0f / (2.0f * PI * VDC_LPF_COF));
+		vdc_lpf_delay = vdc * 1.0f / (2.0f * PI * VDC_LPF_COF) / (time_sample + 1.0f / (2.0f * PI * VDC_LPF_COF));
 
 		/* AC voltage observer */
 		ob_err = il - il_est;
@@ -215,15 +220,15 @@ int main(void)
 		vac_est_set = ob_err * OB_GAIN2 + vacd_est;
 		vacd_est_set = ob_err * OB_GAIN3 - vac_est * 2.0f * PI * AC_FREQ * 2.0f * PI * AC_FREQ;
 
-		il_est += il_est_set * TIM_SPL;
-		vac_est += vac_est_set * TIM_SPL;
-		vacd_est += vacd_est_set * TIM_SPL;
+		il_est += il_est_set * time_sample;
+		vac_est += vac_est_set * time_sample;
+		vacd_est += vacd_est_set * time_sample;
 
 		/* zero cross */
 		if (vac_est * vac_est_delay < 0.0f)
 		{
 			/* PLL */
-			if (vac_est > 0) theta_ref = PI * 5.0f/2.0f;
+			if (vac_est > 0.0f) theta_ref = PI * 5.0f/2.0f;
 				else theta_ref = PI * 3.0f/2.0f;
 			theta_err = theta_ref - theta;
 
@@ -246,13 +251,13 @@ int main(void)
 
 		/* PLL */
 		theta_m = fmodf(theta, 2.0f * PI);
-		theta = theta_m + theta_err * AC_FREQ * 2.0f * TIM_SPL;
+		theta = theta_m + theta_err * time_sample * AC_FREQ * 2.0f;
 
 		/* current controller */
 		il_ref = idc_ref * vdc_lfs * cosf(theta) * 1.414f / VAC_RMS;
 		il_err = il_ref - il;
 		ilc_p = - il_err * 2.0f * PI * CO_FREQ * PRM_L;
-		ilc_i += ilc_p * TIM_SPL * PRM_R / PRM_L;
+		ilc_i += ilc_p * time_sample * PRM_R / PRM_L;
 		duty = (ilc_p + ilc_i + vac_est) / vdc;
 
 		if (duty > 1.0f) duty = 1.0f;
@@ -267,7 +272,7 @@ int main(void)
 
 		/* ADC flag reset */
 		adc_flag = 0;
-    }
+	}
   }
   /* USER CODE END 3 */
 }
